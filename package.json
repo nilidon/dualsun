@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "esbuild server/api.ts --bundle --platform=node --format=esm --outfile=server/published.js --external:stripe && tsc --noEmit && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -21,6 +21,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^5.1.0",
+    "esbuild": "^0.28.2",
     "tailwindcss": "^4.1.16",
     "typescript": "^5.9.3",
     "vite": "^7.1.12"

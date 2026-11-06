@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { apiError, handleApi } from "../server/api";
+
+const entry = "../server/published.js";
 
 function restorePath(req: IncomingMessage) {
   const current = new URL(req.url ?? "/", "http://localhost");
@@ -14,6 +15,10 @@ function restorePath(req: IncomingMessage) {
 export default {
   async fetch(request: Request) {
     try {
+      const shop = (await import(entry)) as {
+        handleApi: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+        apiError: (error: unknown) => { status: number; message: string };
+      };
       const url = new URL(request.url);
       const req = Readable.from([new Uint8Array(await request.arrayBuffer())]) as IncomingMessage;
       req.method = request.method;
@@ -43,14 +48,19 @@ export default {
         },
       } as ServerResponse;
 
-      const handled = await handleApi(req, res);
+      const handled = await shop.handleApi(req, res);
       if (!handled) {
         return Response.json({ error: "Not found." }, { status: 404 });
       }
       return new Response(payload, { status, headers });
     } catch (error) {
       console.error(error);
-      const body = apiError(error);
+      const body = error instanceof Error && error.message.startsWith("Cannot find module")
+        ? { status: 500, message: error.message }
+        : { status: 500, message: error instanceof Error && error.message.startsWith("Add TURSO_") ? error.message : "Something went wrong." };
+      if (error instanceof Error && error.message.startsWith("Add TURSO_")) {
+        return Response.json({ error: error.message }, { status: 503 });
+      }
       return Response.json({ error: body.message }, { status: body.status });
     }
   },
