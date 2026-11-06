@@ -1,4 +1,4 @@
-import { ORDER_EMAIL, PHONE_TEL } from "../src/lib/order";
+import { readShippingSettings } from "./db";
 
 const SHIPPO_API_BASE = "https://api.goshippo.com";
 
@@ -41,50 +41,48 @@ export function shippoConfigured() {
   return token().length > 0;
 }
 
-function labelFileType() {
-  const value = process.env.SHIPPO_LABEL_FILE_TYPE?.trim().toUpperCase();
-  if (value === "PDF" || value === "PNG") return value;
-  return "PDF_4x6";
-}
+const LABEL_FILE_TYPE = "PDF_4x6";
+const FROM_NAME = "Dual Sun Elixir";
 
 export function shipFromAddress(): { ok: true; address: ShippoAddress } | { ok: false; error: string } {
-  const street1 = process.env.SHIPPO_FROM_STREET1?.trim() ?? "";
-  const city = process.env.SHIPPO_FROM_CITY?.trim() ?? "";
-  const state = process.env.SHIPPO_FROM_STATE?.trim() ?? "";
-  const zip = process.env.SHIPPO_FROM_ZIP?.trim() ?? "";
-  const country = (process.env.SHIPPO_FROM_COUNTRY?.trim() || "").toUpperCase();
-  if (!street1 || !city || !state || !zip || (country !== "US" && country !== "CA")) {
-    return {
-      ok: false,
-      error:
-        "Add the ship-from address to .env: SHIPPO_FROM_STREET1, SHIPPO_FROM_CITY, SHIPPO_FROM_STATE, SHIPPO_FROM_ZIP, and SHIPPO_FROM_COUNTRY (US or CA).",
-    };
+  const settings = readShippingSettings();
+  const country = settings.country.trim().toUpperCase();
+  const weight = Number(settings.weightOz);
+  const length = Number(settings.length);
+  const width = Number(settings.width);
+  const height = Number(settings.height);
+  if (!settings.street1 || !settings.city || !settings.state || !settings.zip || (country !== "US" && country !== "CA")) {
+    return { ok: false, error: "Save the ship-from address on this page before printing a label." };
   }
-  const street2 = process.env.SHIPPO_FROM_STREET2?.trim();
+  if (!settings.phone || !settings.email.includes("@")) {
+    return { ok: false, error: "Save a phone and email on this page before printing a label." };
+  }
+  if (!(weight > 0) || !(length > 0) || !(width > 0) || !(height > 0)) {
+    return { ok: false, error: "Save the parcel weight and size on this page before printing a label." };
+  }
   return {
     ok: true,
     address: {
-      name: process.env.SHIPPO_FROM_NAME?.trim() || "Dual Sun Elixir",
-      street1,
-      ...(street2 ? { street2 } : {}),
-      city,
-      state,
-      zip,
+      name: FROM_NAME,
+      street1: settings.street1,
+      city: settings.city,
+      state: settings.state,
+      zip: settings.zip,
       country,
-      phone: process.env.SHIPPO_FROM_PHONE?.trim() || PHONE_TEL,
-      email: process.env.SHIPPO_FROM_EMAIL?.trim() || ORDER_EMAIL,
+      phone: settings.phone,
+      email: settings.email,
     },
   };
 }
 
 function parcel() {
-  const weight = Number(process.env.SHIPPO_PARCEL_WEIGHT_OZ?.trim() || "18");
+  const settings = readShippingSettings();
   return {
-    length: process.env.SHIPPO_PARCEL_LENGTH?.trim() || "6",
-    width: process.env.SHIPPO_PARCEL_WIDTH?.trim() || "4",
-    height: process.env.SHIPPO_PARCEL_HEIGHT?.trim() || "4",
+    length: settings.length,
+    width: settings.width,
+    height: settings.height,
     distance_unit: "in" as const,
-    weight: String(Number.isFinite(weight) && weight > 0 ? weight : 18),
+    weight: settings.weightOz,
     mass_unit: "oz" as const,
   };
 }
@@ -139,10 +137,11 @@ function parseRate(raw: Record<string, unknown>): Rate | null {
 
 function pickRate(rates: Rate[]) {
   const usable = rates.filter((rate) => rate.amount > 0 && !rate.attributes.includes("CHEAPEST_DISABLED"));
-  const usps = usable.filter((rate) => rate.provider.toUpperCase() === "USPS").sort((a, b) => a.amount - b.amount);
-  if (usps.length > 0) return usps[0];
-  usable.sort((a, b) => a.amount - b.amount);
-  return usable[0] ?? null;
+  if (usable.length === 0) return null;
+  const marked = usable.filter((rate) => rate.attributes.includes("CHEAPEST"));
+  const pool = marked.length > 0 ? marked : usable;
+  pool.sort((a, b) => a.amount - b.amount);
+  return pool[0];
 }
 
 export function carrierToken(carrier: string) {
@@ -184,7 +183,7 @@ export async function buyLabel(addressTo: ShippoAddress): Promise<{ ok: true; la
 
   const bought = await shippoFetch("/transactions/", {
     method: "POST",
-    body: JSON.stringify({ rate: chosen.objectId, label_file_type: labelFileType(), async: false }),
+    body: JSON.stringify({ rate: chosen.objectId, label_file_type: LABEL_FILE_TYPE, async: false }),
   });
   if (!bought.ok) return bought;
   if (String(bought.data.status ?? "").toUpperCase() !== "SUCCESS") {
@@ -199,11 +198,13 @@ export async function buyLabel(addressTo: ShippoAddress): Promise<{ ok: true; la
     return { ok: false, error: "Shippo did not return a label to print." };
   }
 
-  const carrier = chosen.provider || "USPS";
-  await shippoFetch("/tracks/", {
-    method: "POST",
-    body: JSON.stringify({ carrier: carrierToken(carrier), tracking_number: trackingNumber }),
-  });
+  const carrier = chosen.provider;
+  if (carrier) {
+    await shippoFetch("/tracks/", {
+      method: "POST",
+      body: JSON.stringify({ carrier: carrierToken(carrier), tracking_number: trackingNumber }),
+    });
+  }
 
   return {
     ok: true,

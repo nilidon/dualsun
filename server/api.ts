@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import type { Connect, Plugin } from "vite";
 import { adminConfigured, checkPassword, clearCookie, readSession, sessionCookie } from "./admin-auth";
 import { handleCheckout } from "./checkout";
+import { readShippingSettings, writeShippingSettings, type ShippingSettings } from "./db";
 import { loadServerEnv } from "./env";
 import {
   applyCarrierUpdate,
@@ -75,6 +76,33 @@ function text(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function shippingFromBody(body: Record<string, unknown>): ShippingSettings | string {
+  const settings: ShippingSettings = {
+    street1: text(body.street1),
+    city: text(body.city),
+    state: text(body.state),
+    zip: text(body.zip),
+    country: text(body.country).toUpperCase(),
+    phone: text(body.phone),
+    email: text(body.email),
+    weightOz: text(body.weightOz),
+    length: text(body.length),
+    width: text(body.width),
+    height: text(body.height),
+  };
+  if (!settings.street1 || !settings.city || !settings.state || !settings.zip) {
+    return "Enter the street, city, state, and ZIP.";
+  }
+  if (settings.country !== "US" && settings.country !== "CA") return "Country has to be US or CA.";
+  if (!settings.phone) return "Enter a phone number.";
+  if (!settings.email.includes("@")) return "Enter an email.";
+  if (!(Number(settings.weightOz) > 0)) return "Weight has to be greater than zero.";
+  if (!(Number(settings.length) > 0) || !(Number(settings.width) > 0) || !(Number(settings.height) > 0)) {
+    return "Length, width, and height have to be greater than zero.";
+  }
+  return settings;
+}
+
 async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (req.method === "POST" && url.pathname === "/api/admin/login") {
     if (!adminConfigured()) {
@@ -97,6 +125,22 @@ async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL) 
 
   if (!signedIn(req)) {
     send(res, 401, { error: "Sign in again." });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/shipping" && req.method === "GET") {
+    send(res, 200, { settings: readShippingSettings() });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/shipping" && req.method === "POST") {
+    const body = (await readJson(req)) as Record<string, unknown>;
+    const settings = shippingFromBody(body);
+    if (typeof settings === "string") {
+      send(res, 400, { error: settings });
+      return;
+    }
+    send(res, 200, { settings: writeShippingSettings(settings) });
     return;
   }
 

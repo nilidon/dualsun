@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { ORDER_EMAIL, PHONE_TEL } from "../src/lib/order";
 import type { OrderStatus } from "./carrier-status";
 
 export type { OrderStatus };
@@ -132,6 +133,20 @@ function connection() {
       shipped_at TEXT NOT NULL DEFAULT '',
       delivered_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS shipping_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      street1 TEXT NOT NULL DEFAULT '',
+      city TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL DEFAULT '',
+      zip TEXT NOT NULL DEFAULT '',
+      country TEXT NOT NULL DEFAULT 'US',
+      phone TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      weight_oz TEXT NOT NULL DEFAULT '18',
+      length TEXT NOT NULL DEFAULT '6',
+      width TEXT NOT NULL DEFAULT '4',
+      height TEXT NOT NULL DEFAULT '4'
     );
     UPDATE orders SET label_status = 'failed', label_error = 'The label purchase was interrupted. Try again.' WHERE label_status = 'purchasing';
   `);
@@ -269,6 +284,88 @@ export function claimLabelPurchase(id: number) {
     )
     .run(new Date().toISOString(), id);
   return result.changes === 1;
+}
+
+export type ShippingSettings = {
+  street1: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  phone: string;
+  email: string;
+  weightOz: string;
+  length: string;
+  width: string;
+  height: string;
+};
+
+function blankShipping(): ShippingSettings {
+  return {
+    street1: "",
+    city: "",
+    state: "",
+    zip: "",
+    country: "US",
+    phone: PHONE_TEL,
+    email: ORDER_EMAIL,
+    weightOz: "18",
+    length: "6",
+    width: "4",
+    height: "4",
+  };
+}
+
+export function readShippingSettings(): ShippingSettings {
+  const row = connection().prepare(`SELECT * FROM shipping_settings WHERE id = 1`).get() as Record<string, unknown> | undefined;
+  if (!row) return blankShipping();
+  return {
+    street1: String(row.street1 ?? ""),
+    city: String(row.city ?? ""),
+    state: String(row.state ?? ""),
+    zip: String(row.zip ?? ""),
+    country: String(row.country ?? "US"),
+    phone: String(row.phone ?? ""),
+    email: String(row.email ?? ""),
+    weightOz: String(row.weight_oz ?? "18"),
+    length: String(row.length ?? "6"),
+    width: String(row.width ?? "4"),
+    height: String(row.height ?? "4"),
+  };
+}
+
+export function writeShippingSettings(settings: ShippingSettings) {
+  connection()
+    .prepare(
+      `INSERT INTO shipping_settings (id, street1, city, state, zip, country, phone, email, weight_oz, length, width, height)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         street1 = excluded.street1,
+         city = excluded.city,
+         state = excluded.state,
+         zip = excluded.zip,
+         country = excluded.country,
+         phone = excluded.phone,
+         email = excluded.email,
+         weight_oz = excluded.weight_oz,
+         length = excluded.length,
+         width = excluded.width,
+         height = excluded.height`,
+    )
+    .run(
+      settings.street1,
+      settings.city,
+      settings.state,
+      settings.zip,
+      settings.country,
+      settings.phone,
+      settings.email,
+      settings.weightOz,
+      settings.length,
+      settings.width,
+      settings.height,
+    );
+  return readShippingSettings();
 }
 
 export function releaseLabelClaim(id: number, error: string) {

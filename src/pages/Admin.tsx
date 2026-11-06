@@ -35,6 +35,20 @@ type Order = {
 
 type Counts = Record<Tab, number>;
 
+type Shipping = {
+  street1: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  phone: string;
+  email: string;
+  weightOz: string;
+  length: string;
+  width: string;
+  height: string;
+};
+
 const tabs: { id: Tab; label: string; empty: string }[] = [
   { id: "placed", label: "Placed", empty: "No paid orders are waiting." },
   { id: "prepared", label: "Prepared", empty: "Nothing is packed right now." },
@@ -73,6 +87,10 @@ export function Admin() {
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [actionError, setActionError] = useState("");
+  const [shipping, setShipping] = useState<Shipping | null>(null);
+  const [shippingError, setShippingError] = useState("");
+  const [shippingSaved, setShippingSaved] = useState(false);
+  const [savingShipping, setSavingShipping] = useState(false);
 
   const load = useCallback(async (next: Tab) => {
     setLoading(true);
@@ -114,6 +132,43 @@ export function Admin() {
   useEffect(() => {
     void load(tab);
   }, [load, tab]);
+
+  useEffect(() => {
+    if (!authed) return;
+    void fetch("/api/admin/shipping")
+      .then(async (response) => {
+        if (!response.ok) return;
+        const body = (await response.json()) as { settings: Shipping };
+        setShipping(body.settings);
+      })
+      .catch(() => undefined);
+  }, [authed]);
+
+  function setField(key: keyof Shipping, value: string) {
+    setShippingSaved(false);
+    setShipping((current) => (current ? { ...current, [key]: value } : current));
+  }
+
+  async function saveShipping(event: FormEvent) {
+    event.preventDefault();
+    if (!shipping) return;
+    setSavingShipping(true);
+    setShippingError("");
+    setShippingSaved(false);
+    const response = await fetch("/api/admin/shipping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(shipping),
+    });
+    setSavingShipping(false);
+    if (!response.ok) {
+      setShippingError(await readError(response));
+      return;
+    }
+    const body = (await response.json()) as { settings: Shipping };
+    setShipping(body.settings);
+    setShippingSaved(true);
+  }
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -204,6 +259,44 @@ export function Admin() {
 
         {authed ? (
           <>
+            {shipping ? (
+              <form className="mt-8 rounded-[1.5rem] bg-cream p-6" onSubmit={(event) => void saveShipping(event)}>
+                <h2 className="font-display text-2xl font-extrabold">Ship from</h2>
+                <p className="mt-2 text-sm text-stone">Printed on the label as Dual Sun Elixir. The parcel is one packed bottle.</p>
+                <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                  <Field label="Street" value={shipping.street1} onChange={(value) => setField("street1", value)} />
+                  <Field label="City" value={shipping.city} onChange={(value) => setField("city", value)} />
+                  <Field label="State" value={shipping.state} onChange={(value) => setField("state", value)} />
+                  <Field label="ZIP" value={shipping.zip} onChange={(value) => setField("zip", value)} />
+                  <label className="text-sm font-semibold">
+                    Country
+                    <select
+                      value={shipping.country}
+                      onChange={(event) => setField("country", event.target.value)}
+                      className="mt-2 h-11 w-full rounded-full border border-ink/15 bg-paper px-4"
+                    >
+                      <option value="US">United States</option>
+                      <option value="CA">Canada</option>
+                    </select>
+                  </label>
+                  <Field label="Phone" value={shipping.phone} onChange={(value) => setField("phone", value)} />
+                  <Field label="Email" value={shipping.email} onChange={(value) => setField("email", value)} />
+                  <Field label="Weight (oz)" value={shipping.weightOz} onChange={(value) => setField("weightOz", value)} />
+                  <Field label="Length (in)" value={shipping.length} onChange={(value) => setField("length", value)} />
+                  <Field label="Width (in)" value={shipping.width} onChange={(value) => setField("width", value)} />
+                  <Field label="Height (in)" value={shipping.height} onChange={(value) => setField("height", value)} />
+                </div>
+                {shippingError ? <p className="mt-3 text-sm text-brass">{shippingError}</p> : null}
+                {shippingSaved ? <p className="mt-3 text-sm text-stone">Saved.</p> : null}
+                <button
+                  type="submit"
+                  disabled={savingShipping}
+                  className="mt-5 h-11 cursor-pointer rounded-full bg-gold px-5 text-sm font-semibold disabled:opacity-60"
+                >
+                  {savingShipping ? "Saving…" : "Save shipping"}
+                </button>
+              </form>
+            ) : null}
             <div className="mt-6 flex gap-2 overflow-x-auto pb-1">
               {tabs.map((item) => (
                 <button
@@ -316,5 +409,20 @@ export function Admin() {
         ) : null}
       </div>
     </main>
+  );
+}
+
+function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const id = `ship-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`;
+  return (
+    <label className="text-sm font-semibold" htmlFor={id}>
+      {label}
+      <input
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-2 h-11 w-full rounded-full border border-ink/15 bg-paper px-4 font-normal outline-none"
+      />
+    </label>
   );
 }
