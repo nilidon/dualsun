@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import { setImmediate } from "node:timers";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const entry = "../server/published.js";
@@ -20,7 +21,12 @@ export default {
         apiError: (error: unknown) => { status: number; message: string };
       };
       const url = new URL(request.url);
-      const req = Readable.from([new Uint8Array(await request.arrayBuffer())]) as IncomingMessage;
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const req = new Readable({ read() {} }) as IncomingMessage;
+      setImmediate(() => {
+        req.push(bytes);
+        req.push(null);
+      });
       req.method = request.method;
       req.url = `${url.pathname}${url.search}`;
       req.headers = {};
@@ -55,13 +61,9 @@ export default {
       return new Response(payload, { status, headers });
     } catch (error) {
       console.error(error);
-      const body = error instanceof Error && error.message.startsWith("Cannot find module")
-        ? { status: 500, message: error.message }
-        : { status: 500, message: error instanceof Error && error.message.startsWith("Add TURSO_") ? error.message : "Something went wrong." };
-      if (error instanceof Error && error.message.startsWith("Add TURSO_")) {
-        return Response.json({ error: error.message }, { status: 503 });
-      }
-      return Response.json({ error: body.message }, { status: body.status });
+      const message = error instanceof Error ? error.message : "Something went wrong.";
+      const status = message.startsWith("Add TURSO_") ? 503 : 500;
+      return Response.json({ error: message }, { status });
     }
   },
 };
