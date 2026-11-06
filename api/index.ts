@@ -7,8 +7,18 @@ export const config = {
   },
 };
 
+function restorePath(req: IncomingMessage) {
+  const current = new URL(req.url ?? "/", "http://localhost");
+  const route = current.searchParams.get("__path");
+  if (!route || route.includes("..") || !/^[\w./-]+$/.test(route)) return;
+  current.searchParams.delete("__path");
+  const query = current.searchParams.toString();
+  req.url = `/api/${route}${query ? `?${query}` : ""}`;
+}
+
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   try {
+    restorePath(req);
     const handled = await handleApi(req, res);
     if (!handled && !res.headersSent) {
       res.statusCode = 404;
