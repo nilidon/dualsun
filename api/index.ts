@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { apiError, handleApi } from "../server/api";
 
 function restorePath(req: IncomingMessage) {
   const current = new URL(req.url ?? "/", "http://localhost");
@@ -13,7 +14,6 @@ function restorePath(req: IncomingMessage) {
 export default {
   async fetch(request: Request) {
     try {
-      const { handleApi } = await import("../server/api");
       const url = new URL(request.url);
       const req = Readable.from([new Uint8Array(await request.arrayBuffer())]) as IncomingMessage;
       req.method = request.method;
@@ -50,9 +50,8 @@ export default {
       return new Response(payload, { status, headers });
     } catch (error) {
       console.error(error);
-      const message = error instanceof Error ? error.message : "Something went wrong.";
-      const status = message.startsWith("Add TURSO_") ? 503 : 500;
-      return Response.json({ error: message }, { status });
+      const body = apiError(error);
+      return Response.json({ error: body.message }, { status: body.status });
     }
   },
 };
