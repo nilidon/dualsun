@@ -1,11 +1,6 @@
+import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { apiError, handleApi } from "../server/api";
-
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
 
 function restorePath(req: IncomingMessage) {
   const current = new URL(req.url ?? "/", "http://localhost");
@@ -16,21 +11,47 @@ function restorePath(req: IncomingMessage) {
   req.url = `/api/${route}${query ? `?${query}` : ""}`;
 }
 
-export default async function handler(req: IncomingMessage, res: ServerResponse) {
-  try {
-    restorePath(req);
-    const handled = await handleApi(req, res);
-    if (!handled && !res.headersSent) {
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Not found." }));
+export default {
+  async fetch(request: Request) {
+    try {
+      const url = new URL(request.url);
+      const req = Readable.from([new Uint8Array(await request.arrayBuffer())]) as IncomingMessage;
+      req.method = request.method;
+      req.url = `${url.pathname}${url.search}`;
+      req.headers = {};
+      request.headers.forEach((value, key) => {
+        req.headers[key] = value;
+      });
+      restorePath(req);
+
+      const headers = new Headers();
+      let status = 200;
+      let payload = "";
+      let headersSent = false;
+      const res = {
+        get headersSent() {
+          return headersSent;
+        },
+        statusCode: 200,
+        setHeader(name: string, value: string) {
+          headers.set(name, value);
+        },
+        end(chunk?: string) {
+          headersSent = true;
+          status = res.statusCode;
+          payload = chunk ?? "";
+        },
+      } as ServerResponse;
+
+      const handled = await handleApi(req, res);
+      if (!handled) {
+        return Response.json({ error: "Not found." }, { status: 404 });
+      }
+      return new Response(payload, { status, headers });
+    } catch (error) {
+      console.error(error);
+      const body = apiError(error);
+      return Response.json({ error: body.message }, { status: body.status });
     }
-  } catch (error) {
-    console.error(error);
-    if (res.headersSent) return;
-    const body = apiError(error);
-    res.statusCode = body.status;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: body.message }));
-  }
-}
+  },
+};
