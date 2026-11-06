@@ -61,9 +61,9 @@ export default {
       return new Response(payload, { status, headers });
     } catch (error) {
       console.error(error);
-      const message = error instanceof Error ? error.message : "Something went wrong.";
-      const status = message.startsWith("Add TURSO_") ? 503 : 500;
-      return Response.json({ error: message }, { status });
+      const message = error instanceof Error ? error.message : "";
+      if (message.startsWith("Add TURSO_")) return Response.json({ error: message }, { status: 503 });
+      return Response.json({ error: "Something went wrong." }, { status: 500 });
     }
   },
 };
