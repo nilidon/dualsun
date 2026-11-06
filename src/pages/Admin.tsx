@@ -235,7 +235,8 @@ export function Admin() {
           ) : null}
         </header>
 
-        {authed === null ? <p className="mt-10 text-stone">Loading orders.</p> : null}
+        {authed === null && !actionError ? <p className="mt-10 text-stone">Loading orders.</p> : null}
+        {authed === null && actionError ? <p className="mt-10 text-sm text-brass">{actionError}</p> : null}
 
         {authed === false ? (
           <form className="mt-10 max-w-sm" onSubmit={(event) => void login(event)}>

@@ -44,8 +44,8 @@ export function shippoConfigured() {
 const LABEL_FILE_TYPE = "PDF_4x6";
 const FROM_NAME = "Dual Sun Elixir";
 
-export function shipFromAddress(): { ok: true; address: ShippoAddress } | { ok: false; error: string } {
-  const settings = readShippingSettings();
+export async function shipFromAddress(): Promise<{ ok: true; address: ShippoAddress } | { ok: false; error: string }> {
+  const settings = await readShippingSettings();
   const country = settings.country.trim().toUpperCase();
   const weight = Number(settings.weightOz);
   const length = Number(settings.length);
@@ -75,8 +75,8 @@ export function shipFromAddress(): { ok: true; address: ShippoAddress } | { ok: 
   };
 }
 
-function parcel() {
-  const settings = readShippingSettings();
+async function parcel() {
+  const settings = await readShippingSettings();
   return {
     length: settings.length,
     width: settings.width,
@@ -154,7 +154,7 @@ export async function buyLabel(addressTo: ShippoAddress): Promise<{ ok: true; la
   if (!shippoConfigured()) {
     return { ok: false, error: "Shippo is not connected yet. Add SHIPPO_API_TOKEN to .env and restart the site." };
   }
-  const from = shipFromAddress();
+  const from = await shipFromAddress();
   if (!from.ok) return from;
 
   const shipment = await shippoFetch("/shipments/", {
@@ -166,7 +166,7 @@ export async function buyLabel(addressTo: ShippoAddress): Promise<{ ok: true; la
         phone: addressTo.phone || undefined,
         email: addressTo.email || undefined,
       },
-      parcels: [parcel()],
+      parcels: [await parcel()],
       async: false,
     }),
   });

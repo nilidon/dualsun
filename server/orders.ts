@@ -103,7 +103,7 @@ function text(value: string | null | undefined) {
 }
 
 export async function recordPaidSession(sessionId: string) {
-  const existing = getOrderBySession(sessionId);
+  const existing = await getOrderBySession(sessionId);
   if (existing) return { ok: true as const, order: existing };
   const stripe = stripeClient();
   if (!stripe) return { ok: false as const, error: "Stripe is not connected yet." };
@@ -116,7 +116,7 @@ export async function recordPaidSession(sessionId: string) {
   }
   if (session.payment_status !== "paid") return { ok: false as const, error: "This payment is not complete." };
 
-  const again = getOrderBySession(session.id);
+  const again = await getOrderBySession(session.id);
   if (again) return { ok: true as const, order: again };
 
   const shipping = session.collected_information?.shipping_details;
@@ -126,7 +126,7 @@ export async function recordPaidSession(sessionId: string) {
   const heard = session.custom_fields?.find((field) => field.key === "heard");
   const heardValue = heard && "dropdown" in heard ? text(heard.dropdown?.value) : "";
 
-  const order = insertOrder({
+  const order = await insertOrder({
     stripeSessionId: session.id,
     stripePaymentIntentId: paymentIntentId(session.payment_intent),
     quantity,
@@ -147,7 +147,7 @@ export async function recordPaidSession(sessionId: string) {
   return { ok: true as const, order };
 }
 
-function hold(order: OrderRow, kind: string, detail: string, extra: Partial<OrderRow> = {}) {
+async function hold(order: OrderRow, kind: string, detail: string, extra: Partial<OrderRow> = {}) {
   if (order.status === "refunded") return getOrder(order.id);
   const before = order.status === "on_hold" ? order.status_before_hold : order.status;
   return saveOrder(order.id, {
@@ -159,7 +159,7 @@ function hold(order: OrderRow, kind: string, detail: string, extra: Partial<Orde
   });
 }
 
-function restore(order: OrderRow) {
+async function restore(order: OrderRow) {
   if (order.status !== "on_hold") return order;
   const previous = order.status_before_hold;
   const next: OrderStatus =
@@ -167,18 +167,18 @@ function restore(order: OrderRow) {
       ? previous
       : "placed";
   return (
-    saveOrder(order.id, {
+    (await saveOrder(order.id, {
       status: next,
       status_before_hold: "",
       hold_kind: "",
       hold_detail: "",
       stripe_dispute_id: "",
       stripe_review_id: "",
-    }) ?? order
+    })) ?? order
   );
 }
 
-function markRefunded(order: OrderRow, cents: number, detail: string) {
+async function markRefunded(order: OrderRow, cents: number, detail: string) {
   return saveOrder(order.id, {
     status: "refunded",
     hold_kind: "refund",
@@ -187,18 +187,18 @@ function markRefunded(order: OrderRow, cents: number, detail: string) {
   });
 }
 
-export function applyCarrierUpdate(trackingNumber: string, carrierStatus: string, substatus: string | null) {
-  const order = getOrderByTracking(trackingNumber);
+export async function applyCarrierUpdate(trackingNumber: string, carrierStatus: string, substatus: string | null) {
+  const order = await getOrderByTracking(trackingNumber);
   if (!order) return;
   const next = statusAfterCarrier(order.status, carrierStatus, substatus);
   if (!next || next === order.status) return;
   const now = new Date().toISOString();
   if (next === "on_hold") {
     const detail = carrierStatus.toUpperCase() === "RETURNED" ? "The carrier returned this package." : "The carrier reported a delivery problem.";
-    hold(order, "carrier", detail);
+    await hold(order, "carrier", detail);
     return;
   }
-  saveOrder(order.id, {
+  await saveOrder(order.id, {
     status: next,
     shipped_at: next === "shipped" || (next === "delivered" && !order.shipped_at) ? now : order.shipped_at,
     delivered_at: next === "delivered" ? now : order.delivered_at,
@@ -207,11 +207,11 @@ export function applyCarrierUpdate(trackingNumber: string, carrierStatus: string
 
 export async function syncTracking() {
   if (!shippoConfigured()) return;
-  const orders = ordersWithTracking(["prepared", "shipped"]);
+  const orders = await ordersWithTracking(["prepared", "shipped"]);
   for (const order of orders) {
     const live = await trackingStatus(order.carrier || "USPS", order.tracking_number);
     if (!live.ok) continue;
-    applyCarrierUpdate(order.tracking_number, live.status, live.substatus);
+    await applyCarrierUpdate(order.tracking_number, live.status, live.substatus);
   }
 }
 
@@ -231,15 +231,15 @@ export async function syncStripe() {
   try {
     const refunds = await stripe.refunds.list({ limit: 100 });
     for (const refund of refunds.data) {
-      const order = getOrderByPaymentIntent(intentOf(refund.payment_intent));
+      const order = await getOrderByPaymentIntent(intentOf(refund.payment_intent));
       if (!order) continue;
       const refundStatus = String(refund.status ?? "");
       if (refundStatus === "succeeded") {
-        markRefunded(order, refund.amount, refund.amount >= order.amount_cents ? "Refunded in Stripe." : "Partly refunded in Stripe.");
+        await markRefunded(order, refund.amount, refund.amount >= order.amount_cents ? "Refunded in Stripe." : "Partly refunded in Stripe.");
       } else if (refundStatus === "pending") {
-        hold(order, "refund", "A refund is pending in Stripe.", { refund_cents: Math.max(order.refund_cents, refund.amount) });
+        await hold(order, "refund", "A refund is pending in Stripe.", { refund_cents: Math.max(order.refund_cents, refund.amount) });
       } else if ((refundStatus === "failed" || refundStatus === "canceled") && order.hold_kind === "refund" && order.status === "on_hold") {
-        restore(order);
+        await restore(order);
       }
     }
   } catch (error) {
@@ -249,16 +249,16 @@ export async function syncStripe() {
   try {
     const disputes = await stripe.disputes.list({ limit: 100 });
     for (const dispute of disputes.data) {
-      const order = getOrderByPaymentIntent(intentOf(dispute.payment_intent));
+      const order = await getOrderByPaymentIntent(intentOf(dispute.payment_intent));
       if (!order || order.status === "refunded") continue;
       const reason = dispute.reason ? dispute.reason.replaceAll("_", " ") : "dispute";
       const disputeStatus = String(dispute.status ?? "");
       if (OPEN_DISPUTE.has(disputeStatus)) {
-        hold(order, "dispute", `Stripe dispute: ${reason}.`, { stripe_dispute_id: dispute.id });
+        await hold(order, "dispute", `Stripe dispute: ${reason}.`, { stripe_dispute_id: dispute.id });
       } else if (disputeStatus === "lost") {
-        markRefunded(order, dispute.amount, "Stripe dispute was lost.");
+        await markRefunded(order, dispute.amount, "Stripe dispute was lost.");
       } else if (WON_DISPUTE.has(disputeStatus) && order.hold_kind === "dispute" && order.stripe_dispute_id === dispute.id) {
-        restore(order);
+        await restore(order);
       }
     }
   } catch (error) {
@@ -269,19 +269,19 @@ export async function syncStripe() {
     const reviews = await stripe.reviews.list({ limit: 100 });
     const openReviewIds = new Set(reviews.data.map((review) => review.id));
     for (const review of reviews.data) {
-      const order = getOrderByPaymentIntent(intentOf(review.payment_intent));
+      const order = await getOrderByPaymentIntent(intentOf(review.payment_intent));
       if (!order || order.status === "refunded") continue;
-      hold(order, "review", "Stripe is reviewing this payment.", { stripe_review_id: review.id });
+      await hold(order, "review", "Stripe is reviewing this payment.", { stripe_review_id: review.id });
     }
-    for (const order of listOrders()) {
+    for (const order of await listOrders()) {
       if (order.status !== "on_hold" || order.hold_kind !== "review" || !order.stripe_review_id) continue;
       if (openReviewIds.has(order.stripe_review_id)) continue;
       const review = await stripe.reviews.retrieve(order.stripe_review_id);
       if (review.open) continue;
       if (review.closed_reason === "refunded" || review.closed_reason === "refunded_as_fraud" || review.closed_reason === "disputed") {
-        markRefunded(order, order.amount_cents, "Stripe closed the payment review with a refund.");
+        await markRefunded(order, order.amount_cents, "Stripe closed the payment review with a refund.");
       } else {
-        restore(order);
+        await restore(order);
       }
     }
   } catch (error) {
@@ -292,7 +292,7 @@ export async function syncStripe() {
 }
 
 export async function prepareOrder(id: number) {
-  const order = getOrder(id);
+  const order = await getOrder(id);
   if (!order) return { ok: false as const, status: 404, error: "That order is not here." };
   if (order.status === "on_hold" || order.status === "refunded") {
     return { ok: false as const, status: 409, error: "This order is on hold. Check Holds / refunds before packing it." };
@@ -305,11 +305,11 @@ export async function prepareOrder(id: number) {
   }
 
   if (order.label_url && order.tracking_number) {
-    const prepared = saveOrder(order.id, { status: "prepared", prepared_at: order.prepared_at || new Date().toISOString(), label_status: "purchased" });
+    const prepared = await saveOrder(order.id, { status: "prepared", prepared_at: order.prepared_at || new Date().toISOString(), label_status: "purchased" });
     return { ok: true as const, order: prepared ?? order, labelUrl: order.label_url };
   }
 
-  if (!claimLabelPurchase(order.id)) {
+  if (!(await claimLabelPurchase(order.id))) {
     return { ok: false as const, status: 409, error: "The label for this order is already being bought." };
   }
 
@@ -325,12 +325,12 @@ export async function prepareOrder(id: number) {
     email: order.customer_email,
   });
   if (!bought.ok) {
-    releaseLabelClaim(order.id, bought.error);
+    await releaseLabelClaim(order.id, bought.error);
     return { ok: false as const, status: 502, error: bought.error };
   }
 
   const now = new Date().toISOString();
-  const prepared = saveOrder(order.id, {
+  const prepared = await saveOrder(order.id, {
     status: "prepared",
     prepared_at: now,
     label_status: "purchased",
@@ -346,17 +346,17 @@ export async function prepareOrder(id: number) {
   return { ok: true as const, order: prepared ?? order, labelUrl: bought.label.labelUrl };
 }
 
-export function releaseCarrierHold(id: number) {
-  const order = getOrder(id);
+export async function releaseCarrierHold(id: number) {
+  const order = await getOrder(id);
   if (!order) return { ok: false as const, status: 404, error: "That order is not here." };
   if (order.status !== "on_hold" || order.hold_kind !== "carrier") {
     return { ok: false as const, status: 409, error: "Only a carrier hold can be released here. Stripe holds clear themselves." };
   }
-  return { ok: true as const, order: restore(order) };
+  return { ok: true as const, order: await restore(order) };
 }
 
-export function ordersForTab(tab: string) {
-  const orders = listOrders();
+export async function ordersForTab(tab: string) {
+  const orders = await listOrders();
   const counts = {
     placed: 0,
     prepared: 0,

@@ -1,10 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import Stripe from "stripe";
-import type { Connect, Plugin } from "vite";
 import { adminConfigured, checkPassword, clearCookie, readSession, sessionCookie } from "./admin-auth";
 import { handleCheckout } from "./checkout";
 import { readShippingSettings, writeShippingSettings, type ShippingSettings } from "./db";
-import { loadServerEnv } from "./env";
 import {
   applyCarrierUpdate,
   applyStripeEvent,
@@ -106,7 +104,7 @@ function shippingFromBody(body: Record<string, unknown>): ShippingSettings | str
 async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (req.method === "POST" && url.pathname === "/api/admin/login") {
     if (!adminConfigured()) {
-      send(res, 503, { error: "Add ADMIN_PASSWORD to .env (at least 8 characters) and restart the site." });
+      send(res, 503, { error: "Add ADMIN_PASSWORD (at least 8 characters) to the server environment." });
       return;
     }
     const body = (await readJson(req)) as { password?: unknown };
@@ -129,7 +127,7 @@ async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL) 
   }
 
   if (url.pathname === "/api/admin/shipping" && req.method === "GET") {
-    send(res, 200, { settings: readShippingSettings() });
+    send(res, 200, { settings: await readShippingSettings() });
     return;
   }
 
@@ -140,7 +138,7 @@ async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL) 
       send(res, 400, { error: settings });
       return;
     }
-    send(res, 200, { settings: writeShippingSettings(settings) });
+    send(res, 200, { settings: await writeShippingSettings(settings) });
     return;
   }
 
@@ -153,7 +151,7 @@ async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL) 
     const warnings = (await syncStripe()) ?? [];
     await syncTracking();
     const from = shippoConfigured();
-    const { orders, counts } = ordersForTab(tab);
+    const { orders, counts } = await ordersForTab(tab);
     send(res, 200, {
       orders,
       counts,
@@ -177,7 +175,7 @@ async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL) 
 
   const release = url.pathname.match(/^\/api\/admin\/orders\/(\d+)\/release$/);
   if (req.method === "POST" && release) {
-    const result = releaseCarrierHold(Number(release[1]));
+    const result = await releaseCarrierHold(Number(release[1]));
     if (!result.ok) {
       send(res, result.status, { error: result.error });
       return;
@@ -259,7 +257,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse) {
     }
     const payload = JSON.parse(new TextDecoder().decode(await readBody(req, 1_000_000))) as unknown;
     const update = carrierStatusOf(payload);
-    if (update) applyCarrierUpdate(update.trackingNumber, update.status, update.substatus);
+    if (update) await applyCarrierUpdate(update.trackingNumber, update.status, update.substatus);
     send(res, 200, { received: true });
     return true;
   }
@@ -276,29 +274,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse) {
   return false;
 }
 
-function attach(middlewares: Connect.Server, mode: string, envDir: string | false) {
-  loadServerEnv(mode, envDir);
-  middlewares.use((req, res, next) => {
-    void handleApi(req, res)
-      .then((handled) => {
-        if (!handled) next();
-      })
-      .catch((error) => {
-        console.error(error);
-        if (res.headersSent) return;
-        send(res, 500, { error: "Something went wrong." });
-      });
-  });
-}
-
-export function shopServer(): Plugin {
-  return {
-    name: "dualsun-shop",
-    configureServer(server) {
-      attach(server.middlewares, server.config.mode, server.config.envDir);
-    },
-    configurePreviewServer(server) {
-      attach(server.middlewares, "production", server.config.envDir);
-    },
-  };
+export function apiError(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  if (message.startsWith("Add TURSO_")) return { status: 503, message };
+  return { status: 500, message: "Something went wrong." };
 }
