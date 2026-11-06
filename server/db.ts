@@ -1,6 +1,5 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { createClient } from "@libsql/client";
 import { ORDER_EMAIL, PHONE_TEL } from "../src/lib/order";
 import type { OrderStatus } from "./carrier-status";
 
@@ -188,6 +187,7 @@ function database() {
 async function remote(url: string): Promise<Sql> {
   const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
   if (!authToken) throw new Error(DATABASE_ERROR);
+  const { createClient } = await import("@libsql/client/web");
   const client = createClient({ url, authToken });
   await client.executeMultiple(SCHEMA);
   return {
