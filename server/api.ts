@@ -276,6 +276,6 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse) {
 
 export function apiError(error: unknown) {
   const message = error instanceof Error ? error.message : "";
-  if (message.startsWith("Add TURSO_")) return { status: 503, message };
+  if (message.startsWith("Add SUPABASE_") || message.startsWith("Run supabase/")) return { status: 503, message };
   return { status: 500, message: "Something went wrong." };
 }

@@ -1,5 +1,4 @@
-import { mkdirSync } from "node:fs";
-import path from "node:path";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { ORDER_EMAIL, PHONE_TEL } from "../src/lib/order";
 import type { OrderStatus } from "./carrier-status";
 
@@ -85,151 +84,55 @@ const columns: (keyof OrderRow)[] = [
   "updated_at",
 ];
 
-const SCHEMA = `
-    CREATE TABLE IF NOT EXISTS orders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      stripe_session_id TEXT NOT NULL UNIQUE,
-      stripe_payment_intent_id TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'placed',
-      status_before_hold TEXT NOT NULL DEFAULT '',
-      quantity INTEGER NOT NULL,
-      amount_cents INTEGER NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'usd',
-      customer_name TEXT NOT NULL DEFAULT '',
-      customer_email TEXT NOT NULL DEFAULT '',
-      customer_phone TEXT NOT NULL DEFAULT '',
-      line1 TEXT NOT NULL DEFAULT '',
-      line2 TEXT NOT NULL DEFAULT '',
-      city TEXT NOT NULL DEFAULT '',
-      state TEXT NOT NULL DEFAULT '',
-      postal_code TEXT NOT NULL DEFAULT '',
-      country TEXT NOT NULL DEFAULT '',
-      heard TEXT NOT NULL DEFAULT '',
-      label_url TEXT NOT NULL DEFAULT '',
-      label_status TEXT NOT NULL DEFAULT 'none',
-      label_error TEXT NOT NULL DEFAULT '',
-      tracking_number TEXT NOT NULL DEFAULT '',
-      tracking_url TEXT NOT NULL DEFAULT '',
-      carrier TEXT NOT NULL DEFAULT '',
-      service_level TEXT NOT NULL DEFAULT '',
-      postage_cents INTEGER NOT NULL DEFAULT 0,
-      shippo_transaction_id TEXT NOT NULL DEFAULT '',
-      hold_kind TEXT NOT NULL DEFAULT '',
-      hold_detail TEXT NOT NULL DEFAULT '',
-      stripe_dispute_id TEXT NOT NULL DEFAULT '',
-      stripe_review_id TEXT NOT NULL DEFAULT '',
-      refund_cents INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      prepared_at TEXT NOT NULL DEFAULT '',
-      shipped_at TEXT NOT NULL DEFAULT '',
-      delivered_at TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS shipping_settings (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      street1 TEXT NOT NULL DEFAULT '',
-      city TEXT NOT NULL DEFAULT '',
-      state TEXT NOT NULL DEFAULT '',
-      zip TEXT NOT NULL DEFAULT '',
-      country TEXT NOT NULL DEFAULT 'US',
-      phone TEXT NOT NULL DEFAULT '',
-      email TEXT NOT NULL DEFAULT '',
-      weight_oz TEXT NOT NULL DEFAULT '18',
-      length TEXT NOT NULL DEFAULT '6',
-      width TEXT NOT NULL DEFAULT '4',
-      height TEXT NOT NULL DEFAULT '4'
-    );
-    UPDATE orders SET label_status = 'failed', label_error = 'The label purchase was interrupted. Try again.' WHERE label_status = 'purchasing';
-`;
+const MISSING = "Add SUPABASE_URL and SUPABASE_SECRET_KEY to the server environment.";
+const SCHEMA = "Run supabase/schema.sql in the Supabase SQL editor, then try again.";
 
-type SqlRow = Record<string, unknown>;
-
-type Sql = {
-  get(sql: string, params?: unknown[]): Promise<SqlRow | undefined>;
-  all(sql: string, params?: unknown[]): Promise<SqlRow[]>;
-  run(sql: string, params?: unknown[]): Promise<{ changes: number; lastId: number }>;
-};
-
-const DATABASE_ERROR = "Add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN on Vercel so orders can be saved.";
-
-function values(params: unknown[] = []) {
-  return params.map((value) => {
-    if (typeof value === "boolean") return value ? 1 : 0;
-    if (typeof value === "number" || typeof value === "string" || typeof value === "bigint" || value === null) return value;
-    return String(value ?? "");
-  });
-}
-
-function plain(row: { [key: string]: unknown } | undefined, names: string[]): SqlRow | undefined {
-  if (!row) return undefined;
-  const out: SqlRow = {};
-  for (const key of names) {
-    const value = row[key];
-    out[key] = typeof value === "bigint" ? Number(value) : value;
-  }
-  return out;
-}
-
-let ready: Promise<Sql> | null = null;
+let client: SupabaseClient | null = null;
+let prepared: Promise<void> | null = null;
 
 function database() {
-  if (!ready) {
-    const url = process.env.TURSO_DATABASE_URL?.trim();
-    const opening = url ? remote(url) : process.env.VERCEL ? Promise.reject(new Error(DATABASE_ERROR)) : local();
-    ready = opening.catch((error: unknown) => {
-      ready = null;
-      throw error;
-    });
+  if (client) return client;
+  const url = process.env.SUPABASE_URL?.trim() ?? "";
+  const key = process.env.SUPABASE_SECRET_KEY?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
+  if (!url || !key) throw new Error(MISSING);
+  client = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  return client;
+}
+
+function raise(error: { message: string; code?: string } | null) {
+  if (!error) return;
+  if (error.code === "PGRST205" || error.code === "42P01" || /does not exist|schema cache/i.test(error.message)) {
+    throw new Error(SCHEMA);
   }
-  return ready;
+  throw new Error(error.message);
 }
 
-async function remote(url: string): Promise<Sql> {
-  const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
-  if (!authToken) throw new Error(DATABASE_ERROR);
-  const { createClient } = await import("@libsql/client/web");
-  const client = createClient({ url, authToken });
-  await client.executeMultiple(SCHEMA);
-  return {
-    async get(sql, params) {
-      const result = await client.execute({ sql, args: values(params) });
-      return plain(result.rows[0], result.columns);
-    },
-    async all(sql, params) {
-      const result = await client.execute({ sql, args: values(params) });
-      return result.rows
-        .map((row) => plain(row, result.columns))
-        .filter((row): row is SqlRow => row !== undefined);
-    },
-    async run(sql, params) {
-      const result = await client.execute({ sql, args: values(params) });
-      return { changes: result.rowsAffected, lastId: Number(result.lastInsertRowid ?? 0) };
-    },
-  };
+function ready() {
+  if (!prepared) {
+    prepared = Promise.resolve(
+      database()
+        .from("orders")
+        .update({
+          label_status: "failed",
+          label_error: "The label purchase was interrupted. Try again.",
+        })
+        .eq("label_status", "purchasing"),
+    )
+      .then(({ error }) => {
+        raise(error);
+      })
+      .catch((error: unknown) => {
+        prepared = null;
+        client = null;
+        throw error;
+      });
+  }
+  return prepared;
 }
 
-async function local(): Promise<Sql> {
-  const { DatabaseSync } = await import("node:sqlite");
-  const dir = path.join(process.cwd(), "data");
-  mkdirSync(dir, { recursive: true });
-  const sqlite = new DatabaseSync(path.join(dir, "orders.sqlite"));
-  sqlite.exec(`PRAGMA journal_mode = WAL;${SCHEMA}`);
-  return {
-    async get(sql, params) {
-      const row = sqlite.prepare(sql).get(...values(params)) as SqlRow | undefined;
-      return row;
-    },
-    async all(sql, params) {
-      return sqlite.prepare(sql).all(...values(params)) as SqlRow[];
-    },
-    async run(sql, params) {
-      const result = sqlite.prepare(sql).run(...values(params));
-      return { changes: Number(result.changes), lastId: Number(result.lastInsertRowid ?? 0) };
-    },
-  };
-}
-
-function asOrder(row: Record<string, unknown> | undefined): OrderRow | null {
+function asOrder(row: Record<string, unknown> | null | undefined): OrderRow | null {
   if (!row) return null;
   const order = {} as OrderRow;
   for (const key of columns) {
@@ -245,30 +148,43 @@ function asOrder(row: Record<string, unknown> | undefined): OrderRow | null {
   return order;
 }
 
+function record(data: unknown) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  return data as Record<string, unknown>;
+}
+
 export async function getOrder(id: number) {
-  const row = await (await database()).get(`SELECT * FROM orders WHERE id = ?`, [id]);
-  return asOrder(row);
+  await ready();
+  const { data, error } = await database().from("orders").select("*").eq("id", id).maybeSingle();
+  raise(error);
+  return asOrder(record(data));
 }
 
 export async function getOrderBySession(sessionId: string) {
-  const row = await (await database()).get(`SELECT * FROM orders WHERE stripe_session_id = ?`, [sessionId]);
-  return asOrder(row);
+  await ready();
+  const { data, error } = await database().from("orders").select("*").eq("stripe_session_id", sessionId).maybeSingle();
+  raise(error);
+  return asOrder(record(data));
 }
 
 export async function getOrderByPaymentIntent(paymentIntentId: string) {
   const id = paymentIntentId.trim();
   if (!id) return null;
-  const row = await (await database()).get(`SELECT * FROM orders WHERE stripe_payment_intent_id = ?`, [id]);
-  return asOrder(row);
+  await ready();
+  const { data, error } = await database().from("orders").select("*").eq("stripe_payment_intent_id", id).maybeSingle();
+  raise(error);
+  return asOrder(record(data));
 }
 
 export async function getOrderByTracking(trackingNumber: string) {
   const key = trackingNumber.replace(/\s/g, "").toUpperCase();
   if (!key) return null;
-  const rows = await (await database()).all(`SELECT * FROM orders WHERE tracking_number != ''`);
-  for (const row of rows) {
-    const stored = String(row.tracking_number ?? "").replace(/\s/g, "").toUpperCase();
-    if (stored === key) return asOrder(row);
+  await ready();
+  const { data, error } = await database().from("orders").select("*").neq("tracking_number", "");
+  raise(error);
+  for (const row of data ?? []) {
+    const stored = String(record(row)?.tracking_number ?? "").replace(/\s/g, "").toUpperCase();
+    if (stored === key) return asOrder(record(row));
   }
   return null;
 }
@@ -290,69 +206,76 @@ export async function insertOrder(input: {
   country: string;
   heard: string;
 }): Promise<OrderRow | null> {
+  await ready();
   const now = new Date().toISOString();
-  const result = await (await database()).run(
-    `INSERT INTO orders (
-        stripe_session_id, stripe_payment_intent_id, quantity, amount_cents, currency,
-        customer_name, customer_email, customer_phone, line1, line2, city, state, postal_code, country, heard,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      input.stripeSessionId,
-      input.stripePaymentIntentId,
-      input.quantity,
-      input.amountCents,
-      input.currency,
-      input.customerName,
-      input.customerEmail,
-      input.customerPhone,
-      input.line1,
-      input.line2,
-      input.city,
-      input.state,
-      input.postalCode,
-      input.country,
-      input.heard,
-      now,
-      now,
-    ],
-  );
-  return getOrder(result.lastId);
+  const { data, error } = await database()
+    .from("orders")
+    .insert({
+      stripe_session_id: input.stripeSessionId,
+      stripe_payment_intent_id: input.stripePaymentIntentId,
+      quantity: input.quantity,
+      amount_cents: input.amountCents,
+      currency: input.currency,
+      customer_name: input.customerName,
+      customer_email: input.customerEmail,
+      customer_phone: input.customerPhone,
+      line1: input.line1,
+      line2: input.line2,
+      city: input.city,
+      state: input.state,
+      postal_code: input.postalCode,
+      country: input.country,
+      heard: input.heard,
+      created_at: now,
+      updated_at: now,
+    })
+    .select("*")
+    .single();
+  raise(error);
+  return asOrder(record(data));
 }
 
 export async function saveOrder(id: number, patch: Partial<OrderRow>) {
   const current = await getOrder(id);
   if (!current) return null;
   const next = { ...current, ...patch, id, updated_at: new Date().toISOString() };
-  const assignments = columns
-    .filter((key) => key !== "id")
-    .map((key) => `${key} = ?`)
-    .join(", ");
-  const fields = columns.filter((key) => key !== "id").map((key) => next[key]);
-  await (await database()).run(`UPDATE orders SET ${assignments} WHERE id = ?`, [...fields, id]);
+  const fields = Object.fromEntries(columns.filter((key) => key !== "id").map((key) => [key, next[key]]));
+  const { error } = await database().from("orders").update(fields).eq("id", id);
+  raise(error);
   return getOrder(id);
 }
 
 export async function listOrders() {
-  const rows = await (await database()).all(`SELECT * FROM orders ORDER BY id DESC`);
-  return rows.map((row) => asOrder(row)).filter((order): order is OrderRow => order !== null);
+  await ready();
+  const { data, error } = await database().from("orders").select("*").order("id", { ascending: false });
+  raise(error);
+  return (data ?? []).map((row) => asOrder(record(row))).filter((order): order is OrderRow => order !== null);
 }
 
 export async function ordersWithTracking(statuses: OrderStatus[]) {
-  const marks = statuses.map(() => "?").join(", ");
-  const rows = await (await database()).all(
-    `SELECT * FROM orders WHERE status IN (${marks}) AND tracking_number != '' ORDER BY id ASC LIMIT 40`,
-    statuses,
-  );
-  return rows.map((row) => asOrder(row)).filter((order): order is OrderRow => order !== null);
+  await ready();
+  const { data, error } = await database()
+    .from("orders")
+    .select("*")
+    .in("status", statuses)
+    .neq("tracking_number", "")
+    .order("id", { ascending: true })
+    .limit(40);
+  raise(error);
+  return (data ?? []).map((row) => asOrder(record(row))).filter((order): order is OrderRow => order !== null);
 }
 
 export async function claimLabelPurchase(id: number) {
-  const result = await (await database()).run(
-    `UPDATE orders SET label_status = 'purchasing', label_error = '', updated_at = ? WHERE id = ? AND status = 'placed' AND label_status IN ('none', 'failed')`,
-    [new Date().toISOString(), id],
-  );
-  return result.changes === 1;
+  await ready();
+  const { data, error } = await database()
+    .from("orders")
+    .update({ label_status: "purchasing", label_error: "", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("status", "placed")
+    .in("label_status", ["none", "failed"])
+    .select("id");
+  raise(error);
+  return (data ?? []).length === 1;
 }
 
 export type ShippingSettings = {
@@ -385,8 +308,7 @@ function blankShipping(): ShippingSettings {
   };
 }
 
-export async function readShippingSettings(): Promise<ShippingSettings> {
-  const row = await (await database()).get(`SELECT * FROM shipping_settings WHERE id = 1`);
+function shippingFrom(row: Record<string, unknown> | undefined): ShippingSettings {
   if (!row) return blankShipping();
   return {
     street1: String(row.street1 ?? ""),
@@ -403,42 +325,46 @@ export async function readShippingSettings(): Promise<ShippingSettings> {
   };
 }
 
+export async function readShippingSettings(): Promise<ShippingSettings> {
+  await ready();
+  const { data, error } = await database().from("shipping_settings").select("*").eq("id", 1).maybeSingle();
+  raise(error);
+  return shippingFrom(record(data));
+}
+
 export async function writeShippingSettings(settings: ShippingSettings) {
-  await (await database()).run(
-    `INSERT INTO shipping_settings (id, street1, city, state, zip, country, phone, email, weight_oz, length, width, height)
-       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         street1 = excluded.street1,
-         city = excluded.city,
-         state = excluded.state,
-         zip = excluded.zip,
-         country = excluded.country,
-         phone = excluded.phone,
-         email = excluded.email,
-         weight_oz = excluded.weight_oz,
-         length = excluded.length,
-         width = excluded.width,
-         height = excluded.height`,
-    [
-      settings.street1,
-      settings.city,
-      settings.state,
-      settings.zip,
-      settings.country,
-      settings.phone,
-      settings.email,
-      settings.weightOz,
-      settings.length,
-      settings.width,
-      settings.height,
-    ],
+  await ready();
+  const { error } = await database().from("shipping_settings").upsert(
+    {
+      id: 1,
+      street1: settings.street1,
+      city: settings.city,
+      state: settings.state,
+      zip: settings.zip,
+      country: settings.country,
+      phone: settings.phone,
+      email: settings.email,
+      weight_oz: settings.weightOz,
+      length: settings.length,
+      width: settings.width,
+      height: settings.height,
+    },
+    { onConflict: "id" },
   );
+  raise(error);
   return readShippingSettings();
 }
 
 export async function releaseLabelClaim(id: number, error: string) {
-  await (await database()).run(
-    `UPDATE orders SET label_status = 'failed', label_error = ?, updated_at = ? WHERE id = ? AND label_status = 'purchasing'`,
-    [error.slice(0, 500), new Date().toISOString(), id],
-  );
+  await ready();
+  const { error: updateError } = await database()
+    .from("orders")
+    .update({
+      label_status: "failed",
+      label_error: error.slice(0, 500),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .eq("label_status", "purchasing");
+  raise(updateError);
 }

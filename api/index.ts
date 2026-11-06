@@ -62,7 +62,9 @@ export default {
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : "";
-      if (message.startsWith("Add TURSO_")) return Response.json({ error: message }, { status: 503 });
+      if (message.startsWith("Add SUPABASE_") || message.startsWith("Run supabase/")) {
+        return Response.json({ error: message }, { status: 503 });
+      }
       return Response.json({ error: "Something went wrong." }, { status: 500 });
     }
   },
