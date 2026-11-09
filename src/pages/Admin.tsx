@@ -263,7 +263,9 @@ export function Admin() {
             {shipping ? (
               <form className="mt-8 rounded-[1.5rem] bg-cream p-6" onSubmit={(event) => void saveShipping(event)}>
                 <h2 className="font-display text-2xl font-extrabold">Ship from</h2>
-                <p className="mt-2 text-sm text-stone">Printed on the label as Dual Sun Elixir. The parcel is one packed bottle.</p>
+                <p className="mt-2 text-sm text-stone">
+                  Printed on the label as Dual Sun Elixir. Weight is one packed bottle. More bottles add that weight again. The box size stays as entered.
+                </p>
                 <div className="mt-5 grid gap-4 sm:grid-cols-2">
                   <Field label="Street" value={shipping.street1} onChange={(value) => setField("street1", value)} />
                   <Field label="City" value={shipping.city} onChange={(value) => setField("city", value)} />

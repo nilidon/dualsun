@@ -22717,14 +22717,16 @@ async function shipFromAddress() {
     }
   };
 }
-async function parcel() {
+async function parcel(quantity) {
   const settings = await readShippingSettings();
+  const bottles = Number.isInteger(quantity) && quantity > 0 ? quantity : 1;
+  const weight = Number(settings.weightOz) * bottles;
   return {
     length: settings.length,
     width: settings.width,
     height: settings.height,
     distance_unit: "in",
-    weight: settings.weightOz,
+    weight: String(weight),
     mass_unit: "oz"
   };
 }
@@ -22783,7 +22785,7 @@ function carrierToken(carrier) {
   if (!raw || raw.includes("usps")) return "usps";
   return raw.replace(/\s+/g, "_");
 }
-async function buyLabel(addressTo) {
+async function buyLabel(addressTo, quantity) {
   if (!shippoConfigured()) {
     return { ok: false, error: "Shippo is not connected yet. Add SHIPPO_API_TOKEN to .env and restart the site." };
   }
@@ -22798,7 +22800,7 @@ async function buyLabel(addressTo) {
         phone: addressTo.phone || void 0,
         email: addressTo.email || void 0
       },
-      parcels: [await parcel()],
+      parcels: [await parcel(quantity)],
       async: false
     })
   });
@@ -23095,17 +23097,20 @@ async function prepareOrder(id) {
   if (!await claimLabelPurchase(order.id)) {
     return { ok: false, status: 409, error: "The label for this order is already being bought." };
   }
-  const bought = await buyLabel({
-    name: order.customer_name || "Dual Sun customer",
-    street1: order.line1,
-    ...order.line2 ? { street2: order.line2 } : {},
-    city: order.city,
-    state: order.state,
-    zip: order.postal_code,
-    country: order.country,
-    phone: order.customer_phone,
-    email: order.customer_email
-  });
+  const bought = await buyLabel(
+    {
+      name: order.customer_name || "Dual Sun customer",
+      street1: order.line1,
+      ...order.line2 ? { street2: order.line2 } : {},
+      city: order.city,
+      state: order.state,
+      zip: order.postal_code,
+      country: order.country,
+      phone: order.customer_phone,
+      email: order.customer_email
+    },
+    order.quantity
+  );
   if (!bought.ok) {
     await releaseLabelClaim(order.id, bought.error);
     return { ok: false, status: 502, error: bought.error };

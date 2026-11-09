@@ -75,14 +75,16 @@ export async function shipFromAddress(): Promise<{ ok: true; address: ShippoAddr
   };
 }
 
-async function parcel() {
+async function parcel(quantity: number) {
   const settings = await readShippingSettings();
+  const bottles = Number.isInteger(quantity) && quantity > 0 ? quantity : 1;
+  const weight = Number(settings.weightOz) * bottles;
   return {
     length: settings.length,
     width: settings.width,
     height: settings.height,
     distance_unit: "in" as const,
-    weight: settings.weightOz,
+    weight: String(weight),
     mass_unit: "oz" as const,
   };
 }
@@ -150,7 +152,10 @@ export function carrierToken(carrier: string) {
   return raw.replace(/\s+/g, "_");
 }
 
-export async function buyLabel(addressTo: ShippoAddress): Promise<{ ok: true; label: PurchasedLabel } | { ok: false; error: string }> {
+export async function buyLabel(
+  addressTo: ShippoAddress,
+  quantity: number,
+): Promise<{ ok: true; label: PurchasedLabel } | { ok: false; error: string }> {
   if (!shippoConfigured()) {
     return { ok: false, error: "Shippo is not connected yet. Add SHIPPO_API_TOKEN to .env and restart the site." };
   }
@@ -166,7 +171,7 @@ export async function buyLabel(addressTo: ShippoAddress): Promise<{ ok: true; la
         phone: addressTo.phone || undefined,
         email: addressTo.email || undefined,
       },
-      parcels: [await parcel()],
+      parcels: [await parcel(quantity)],
       async: false,
     }),
   });
