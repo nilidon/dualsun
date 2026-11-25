@@ -1,4 +1,3 @@
-export const UNIT_PRICE = 40;
 export const BOTTLE_ML = 250;
 export const SERVING_ML = 10;
 export const SERVINGS = BOTTLE_ML / SERVING_ML;
@@ -10,6 +9,15 @@ export function money(amount: number) {
   const cents = Math.round(amount * 100);
   const body = cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
   return `$${body}`;
+}
+
+export function formatDollars(cents: number) {
+  return cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
+}
+
+export function priced(amount: number, currency: string) {
+  const code = currency.toLowerCase() === "cad" ? "CAD" : "USD";
+  return `${money(amount)} ${code}`;
 }
 
 export function prefersReducedMotion() {

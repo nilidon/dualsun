@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { ShopProvider } from "./lib/shop";
 import { Home } from "./pages/Home";
 import { Policies } from "./pages/Policies";
 import { Admin } from "./pages/Admin";
@@ -35,7 +36,7 @@ function ScrollToTop() {
 
 export default function App() {
   return (
-    <>
+    <ShopProvider>
       <ScrollToTop />
       <Routes>
         <Route path="admin" element={<Admin />} />
@@ -47,7 +48,7 @@ export default function App() {
           <Route path="*" element={<Missing />} />
         </Route>
       </Routes>
-    </>
+    </ShopProvider>
   );
 }
 

@@ -58,3 +58,6 @@ alter table public.shipping_settings enable row level security;
 
 revoke all on table public.orders from anon, authenticated;
 revoke all on table public.shipping_settings from anon, authenticated;
+
+alter table public.shipping_settings add column if not exists unit_amount_cents integer not null default 4000;
+alter table public.shipping_settings add column if not exists currency text not null default 'usd';

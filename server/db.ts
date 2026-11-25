@@ -325,6 +325,62 @@ function shippingFrom(row: Record<string, unknown> | undefined): ShippingSetting
   };
 }
 
+export type ShopCurrency = "usd" | "cad";
+
+export type ShopPrice = {
+  unitAmountCents: number;
+  currency: ShopCurrency;
+};
+
+function shopPriceFrom(row: Record<string, unknown> | undefined): ShopPrice {
+  const cents = Number(row?.unit_amount_cents);
+  const currency = String(row?.currency ?? "usd").toLowerCase();
+  return {
+    unitAmountCents: Number.isInteger(cents) && cents >= 50 && cents <= 999_999 ? cents : 4000,
+    currency: currency === "cad" ? "cad" : "usd",
+  };
+}
+
+export async function readShopPrice(): Promise<ShopPrice> {
+  await ready();
+  const { data, error } = await database().from("shipping_settings").select("*").eq("id", 1).maybeSingle();
+  raise(error);
+  return shopPriceFrom(record(data));
+}
+
+export async function writeShopPrice(price: ShopPrice) {
+  await ready();
+  const existing = await database().from("shipping_settings").select("id").eq("id", 1).maybeSingle();
+  raise(existing.error);
+  if (!existing.data) {
+    const blank = blankShipping();
+    const { error } = await database().from("shipping_settings").insert({
+      id: 1,
+      street1: blank.street1,
+      city: blank.city,
+      state: blank.state,
+      zip: blank.zip,
+      country: blank.country,
+      phone: blank.phone,
+      email: blank.email,
+      weight_oz: blank.weightOz,
+      length: blank.length,
+      width: blank.width,
+      height: blank.height,
+      unit_amount_cents: price.unitAmountCents,
+      currency: price.currency,
+    });
+    raise(error);
+  } else {
+    const { error } = await database()
+      .from("shipping_settings")
+      .update({ unit_amount_cents: price.unitAmountCents, currency: price.currency })
+      .eq("id", 1);
+    raise(error);
+  }
+  return readShopPrice();
+}
+
 export async function readShippingSettings(): Promise<ShippingSettings> {
   await ready();
   const { data, error } = await database().from("shipping_settings").select("*").eq("id", 1).maybeSingle();

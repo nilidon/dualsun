@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { PHONE_DISPLAY, PHONE_TEL, money, scrollToId, UNIT_PRICE } from "../lib/order";
+import { PHONE_DISPLAY, PHONE_TEL, priced, scrollToId } from "../lib/order";
+import { useShop } from "../lib/shop";
 import { SunMark } from "./SunMark";
 
 const links = [
@@ -10,6 +11,8 @@ const links = [
 ];
 
 export function Layout() {
+  const shop = useShop();
+  const bottle = priced(shop.unitAmountCents / 100, shop.currency);
   const [menuOpen, setMenuOpen] = useState(false);
   const [lifted, setLifted] = useState(false);
   const location = useLocation();
@@ -82,7 +85,7 @@ export function Layout() {
                 to="/checkout"
                 className="hidden h-11 cursor-pointer items-center rounded-full bg-gold px-5 text-sm font-semibold text-ink transition-colors duration-200 hover:bg-gold-2 md:inline-flex"
               >
-                Order · {money(UNIT_PRICE)}
+                Order · {bottle}
               </Link>
               <button
                 type="button"
@@ -188,7 +191,7 @@ export function Layout() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs text-brass">Gold Edition</p>
-            <p>{money(UNIT_PRICE)} · 250 mL</p>
+            <p>{bottle} · 250 mL</p>
           </div>
           <Link
             to="/checkout"

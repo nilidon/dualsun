@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import Stripe from "stripe";
 import { adminConfigured, checkPassword, clearCookie, readSession, sessionCookie } from "./admin-auth";
 import { handleCheckout } from "./checkout";
-import { readShippingSettings, writeShippingSettings, type ShippingSettings } from "./db";
+import { readShippingSettings, readShopPrice, writeShippingSettings, writeShopPrice, type ShippingSettings } from "./db";
 import {
   applyCarrierUpdate,
   applyStripeEvent,
@@ -74,6 +74,18 @@ function text(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function shopCurrency(value: string) {
+  return value === "usd" || value === "cad" ? value : null;
+}
+
+function centsFromDollars(value: string) {
+  if (!/^\d+(\.\d{1,2})?$/.test(value)) return null;
+  const [whole, frac = ""] = value.split(".");
+  const cents = Number(whole) * 100 + Number(frac.padEnd(2, "0"));
+  if (!Number.isInteger(cents) || cents < 50 || cents > 999_999) return null;
+  return cents;
+}
+
 function shippingFromBody(body: Record<string, unknown>): ShippingSettings | string {
   const settings: ShippingSettings = {
     street1: text(body.street1),
@@ -123,6 +135,23 @@ async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL) 
 
   if (!signedIn(req)) {
     send(res, 401, { error: "Sign in again." });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/price" && req.method === "POST") {
+    const body = (await readJson(req)) as { amount?: unknown; currency?: unknown };
+    const cents = centsFromDollars(text(body.amount));
+    const currency = text(body.currency).toLowerCase();
+    if (cents === null) {
+      send(res, 400, { error: "Enter a price from $0.50 to $9,999.99, like 40 or 40.50." });
+      return;
+    }
+    const currencyCode = shopCurrency(currency);
+    if (!currencyCode) {
+      send(res, 400, { error: "Currency has to be USD or CAD." });
+      return;
+    }
+    send(res, 200, await writeShopPrice({ unitAmountCents: cents, currency: currencyCode }));
     return;
   }
 
@@ -216,6 +245,12 @@ function carrierStatusOf(payload: unknown) {
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? "/", "http://localhost");
+  if (req.method === "GET" && url.pathname === "/api/shop") {
+    const price = await readShopPrice();
+    send(res, 200, price);
+    return true;
+  }
+
   if (url.pathname === "/api/checkout") return handleCheckout(req, res);
 
   if (req.method === "POST" && url.pathname === "/api/orders/confirm") {

@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { BOTTLE_ML, PHONE_DISPLAY, PHONE_TEL, SERVINGS, UNIT_PRICE, money } from "../lib/order";
+import { BOTTLE_ML, PHONE_DISPLAY, PHONE_TEL, SERVINGS, priced } from "../lib/order";
+import { useShop } from "../lib/shop";
 
 export function Checkout() {
+  const shop = useShop();
+  const unit = shop.unitAmountCents / 100;
   const [quantity, setQuantity] = useState(1);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  const total = quantity * UNIT_PRICE;
+  const total = quantity * unit;
 
   async function pay() {
     setPending(true);
@@ -49,7 +52,7 @@ export function Checkout() {
               <p className="mt-1 text-stone">
                 {BOTTLE_ML} mL · {SERVINGS} servings
               </p>
-              <p className="mt-2 font-display text-3xl font-extrabold">{money(UNIT_PRICE)}</p>
+              <p className="mt-2 font-display text-3xl font-extrabold">{priced(unit, shop.currency)}</p>
               <div className="mt-auto flex items-center pt-4" role="group" aria-label="Quantity">
                 <button
                   type="button"
@@ -84,7 +87,7 @@ export function Checkout() {
               <dt>
                 Gold Edition × {quantity}
               </dt>
-              <dd>{money(total)}</dd>
+              <dd>{priced(total, shop.currency)}</dd>
             </div>
             <div className="flex justify-between gap-4 text-stone">
               <dt>Ships to</dt>
@@ -92,10 +95,10 @@ export function Checkout() {
             </div>
             <div className="flex justify-between gap-4 border-t border-ink/10 pt-4">
               <dt className="font-semibold">Total</dt>
-              <dd className="font-display text-4xl font-extrabold">{money(total)}</dd>
+              <dd className="font-display text-4xl font-extrabold">{priced(total, shop.currency)}</dd>
             </div>
           </dl>
-          <p className="mt-3 text-sm text-stone">{money(UNIT_PRICE / SERVINGS)} a serving. Leaves in 1–3 business days.</p>
+          <p className="mt-3 text-sm text-stone">{priced(unit / SERVINGS, shop.currency)} a serving. Leaves in 1–3 business days.</p>
 
           {error && (
             <p role="alert" className="mt-6 border border-[#8f2d2d]/30 bg-[#f8ecea] p-4 text-sm text-[#6e2424]">
@@ -107,9 +110,9 @@ export function Checkout() {
             type="button"
             className="mt-6 h-14 w-full cursor-pointer rounded-full bg-gold text-base font-semibold text-ink transition-colors duration-200 hover:bg-gold-2 disabled:cursor-wait disabled:opacity-70"
             onClick={() => void pay()}
-            disabled={pending}
+            disabled={pending || !shop.ready}
           >
-            {pending ? "One moment…" : `Pay ${money(total)}`}
+            {pending ? "One moment…" : `Pay ${priced(total, shop.currency)}`}
           </button>
           <p className="mt-4 text-sm leading-6 text-stone">
             Or call{" "}

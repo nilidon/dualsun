@@ -9,6 +9,7 @@ import {
   insertOrder,
   listOrders,
   ordersWithTracking,
+  readShopPrice,
   releaseLabelClaim,
   saveOrder,
   type OrderRow,
@@ -126,12 +127,13 @@ export async function recordPaidSession(sessionId: string) {
   const heard = session.custom_fields?.find((field) => field.key === "heard");
   const heardValue = heard && "dropdown" in heard ? text(heard.dropdown?.value) : "";
 
+  const price = await readShopPrice();
   const order = await insertOrder({
     stripeSessionId: session.id,
     stripePaymentIntentId: paymentIntentId(session.payment_intent),
     quantity,
-    amountCents: session.amount_total ?? quantity * 4000,
-    currency: session.currency ?? "usd",
+    amountCents: session.amount_total ?? quantity * price.unitAmountCents,
+    currency: session.currency ?? price.currency,
     customerName: text(shipping?.name) || text(session.customer_details?.name),
     customerEmail: text(session.customer_details?.email),
     customerPhone: text(session.customer_details?.phone),

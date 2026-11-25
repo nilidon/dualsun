@@ -14038,136 +14038,6 @@ function readSession(cookieHeader) {
 
 // server/checkout.ts
 import Stripe from "stripe";
-var UNIT_AMOUNT = 4e3;
-var MAX_QUANTITY = 12;
-function send(res, status, body) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(body));
-}
-function readJson(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > 2048) {
-        reject(new Error("Request is too large."));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (chunks.length === 0) {
-        resolve({});
-        return;
-      }
-      const body = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of chunks) {
-        body.set(chunk, offset);
-        offset += chunk.length;
-      }
-      try {
-        resolve(JSON.parse(new TextDecoder().decode(body)));
-      } catch {
-        reject(new Error("The order could not be read."));
-      }
-    });
-    req.on("error", reject);
-  });
-}
-function allowedOrigin(value) {
-  const origin = Array.isArray(value) ? value[0] : value;
-  if (!origin) return null;
-  let url;
-  try {
-    url = new URL(origin);
-  } catch {
-    return null;
-  }
-  const host = url.hostname;
-  const known = host === "127.0.0.1" || host === "localhost" || host === "dualsunelixir.com" || host.endsWith(".dualsunelixir.com");
-  if (!known || url.protocol !== "http:" && url.protocol !== "https:") return null;
-  return origin;
-}
-async function handleCheckout(req, res) {
-  const path = req.url?.split("?")[0];
-  if (path !== "/api/checkout") return false;
-  if (req.method !== "POST") {
-    send(res, 405, { error: "Use POST." });
-    return true;
-  }
-  const key = process.env.STRIPE_SECRET_KEY;
-  if (!key?.startsWith("sk_")) {
-    send(res, 503, {
-      error: "Stripe is not connected yet. Add STRIPE_SECRET_KEY to .env and restart the site."
-    });
-    return true;
-  }
-  try {
-    const body = await readJson(req);
-    const quantity = Number(body.quantity);
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_QUANTITY) {
-      send(res, 400, { error: "Choose between 1 and 12 bottles." });
-      return true;
-    }
-    const origin = allowedOrigin(req.headers.origin);
-    if (!origin) {
-      send(res, 400, { error: "Checkout can only start from the Dual Sun site." });
-      return true;
-    }
-    const stripe = new Stripe(key);
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      submit_type: "pay",
-      line_items: [
-        {
-          quantity,
-          price_data: {
-            currency: "usd",
-            unit_amount: UNIT_AMOUNT,
-            product_data: {
-              name: "Dual Sun Elixir Gold Edition",
-              description: "250 mL. Honey, ginger, turmeric, lemon, and black pepper."
-            }
-          }
-        }
-      ],
-      shipping_address_collection: { allowed_countries: ["US", "CA"] },
-      phone_number_collection: { enabled: true },
-      custom_fields: [
-        {
-          key: "heard",
-          label: { type: "custom", custom: "How did this bottle reach you?" },
-          type: "dropdown",
-          optional: true,
-          dropdown: {
-            options: [
-              { label: "Someone I know", value: "someone" },
-              { label: "A gift", value: "gift" },
-              { label: "Ordered before", value: "reorder" },
-              { label: "This website", value: "website" },
-              { label: "Other", value: "other" }
-            ]
-          }
-        }
-      ],
-      success_url: `${origin}/order/thanks?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/checkout`,
-      metadata: { sku: "DSE-GOLD-250", quantity: String(quantity) }
-    });
-    if (!session.url) {
-      send(res, 502, { error: "Stripe did not return a checkout link." });
-      return true;
-    }
-    send(res, 200, { url: session.url });
-  } catch (error) {
-    console.error(error);
-    send(res, 502, { error: "Stripe could not start checkout. Check the secret key and try again." });
-  }
-  return true;
-}
 
 // node_modules/@supabase/supabase-js/dist/index.mjs
 var dist_exports = {};
@@ -22617,6 +22487,49 @@ function shippingFrom(row) {
     height: String(row.height ?? "4")
   };
 }
+function shopPriceFrom(row) {
+  const cents = Number(row?.unit_amount_cents);
+  const currency = String(row?.currency ?? "usd").toLowerCase();
+  return {
+    unitAmountCents: Number.isInteger(cents) && cents >= 50 && cents <= 999999 ? cents : 4e3,
+    currency: currency === "cad" ? "cad" : "usd"
+  };
+}
+async function readShopPrice() {
+  await ready();
+  const { data, error } = await database().from("shipping_settings").select("*").eq("id", 1).maybeSingle();
+  raise(error);
+  return shopPriceFrom(record(data));
+}
+async function writeShopPrice(price) {
+  await ready();
+  const existing = await database().from("shipping_settings").select("id").eq("id", 1).maybeSingle();
+  raise(existing.error);
+  if (!existing.data) {
+    const blank = blankShipping();
+    const { error } = await database().from("shipping_settings").insert({
+      id: 1,
+      street1: blank.street1,
+      city: blank.city,
+      state: blank.state,
+      zip: blank.zip,
+      country: blank.country,
+      phone: blank.phone,
+      email: blank.email,
+      weight_oz: blank.weightOz,
+      length: blank.length,
+      width: blank.width,
+      height: blank.height,
+      unit_amount_cents: price.unitAmountCents,
+      currency: price.currency
+    });
+    raise(error);
+  } else {
+    const { error } = await database().from("shipping_settings").update({ unit_amount_cents: price.unitAmountCents, currency: price.currency }).eq("id", 1);
+    raise(error);
+  }
+  return readShopPrice();
+}
 async function readShippingSettings() {
   await ready();
   const { data, error } = await database().from("shipping_settings").select("*").eq("id", 1).maybeSingle();
@@ -22653,6 +22566,143 @@ async function releaseLabelClaim(id, error) {
     updated_at: (/* @__PURE__ */ new Date()).toISOString()
   }).eq("id", id).eq("label_status", "purchasing");
   raise(updateError);
+}
+
+// server/checkout.ts
+var MAX_QUANTITY = 12;
+function send(res, status, body) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(body));
+}
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > 2048) {
+        reject(new Error("Request is too large."));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (chunks.length === 0) {
+        resolve({});
+        return;
+      }
+      const body = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.length;
+      }
+      try {
+        resolve(JSON.parse(new TextDecoder().decode(body)));
+      } catch {
+        reject(new Error("The order could not be read."));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+function allowedOrigin(value) {
+  const origin = Array.isArray(value) ? value[0] : value;
+  if (!origin) return null;
+  let url;
+  try {
+    url = new URL(origin);
+  } catch {
+    return null;
+  }
+  const host = url.hostname;
+  const known = host === "127.0.0.1" || host === "localhost" || host === "dualsunelixir.com" || host.endsWith(".dualsunelixir.com");
+  if (!known || url.protocol !== "http:" && url.protocol !== "https:") return null;
+  return origin;
+}
+async function handleCheckout(req, res) {
+  const path = req.url?.split("?")[0];
+  if (path !== "/api/checkout") return false;
+  if (req.method !== "POST") {
+    send(res, 405, { error: "Use POST." });
+    return true;
+  }
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key?.startsWith("sk_")) {
+    send(res, 503, {
+      error: "Stripe is not connected yet. Add STRIPE_SECRET_KEY to .env and restart the site."
+    });
+    return true;
+  }
+  try {
+    const body = await readJson(req);
+    const quantity = Number(body.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_QUANTITY) {
+      send(res, 400, { error: "Choose between 1 and 12 bottles." });
+      return true;
+    }
+    const origin = allowedOrigin(req.headers.origin);
+    if (!origin) {
+      send(res, 400, { error: "Checkout can only start from the Dual Sun site." });
+      return true;
+    }
+    const price = await readShopPrice();
+    const stripe = new Stripe(key);
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      submit_type: "pay",
+      line_items: [
+        {
+          quantity,
+          price_data: {
+            currency: price.currency,
+            unit_amount: price.unitAmountCents,
+            product_data: {
+              name: "Dual Sun Elixir Gold Edition",
+              description: "250 mL. Honey, ginger, turmeric, lemon, and black pepper."
+            }
+          }
+        }
+      ],
+      shipping_address_collection: { allowed_countries: ["US", "CA"] },
+      phone_number_collection: { enabled: true },
+      custom_fields: [
+        {
+          key: "heard",
+          label: { type: "custom", custom: "How did this bottle reach you?" },
+          type: "dropdown",
+          optional: true,
+          dropdown: {
+            options: [
+              { label: "Someone I know", value: "someone" },
+              { label: "A gift", value: "gift" },
+              { label: "Ordered before", value: "reorder" },
+              { label: "This website", value: "website" },
+              { label: "Other", value: "other" }
+            ]
+          }
+        }
+      ],
+      success_url: `${origin}/order/thanks?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/checkout`,
+      metadata: { sku: "DSE-GOLD-250", quantity: String(quantity) }
+    });
+    if (!session.url) {
+      send(res, 502, { error: "Stripe did not return a checkout link." });
+      return true;
+    }
+    send(res, 200, { url: session.url });
+  } catch (error) {
+    console.error(error);
+    const message = error instanceof Error ? error.message : "";
+    if (message.startsWith("Add SUPABASE_") || message.startsWith("Run supabase/")) {
+      send(res, 503, { error: message });
+      return true;
+    }
+    send(res, 502, { error: "Stripe could not start checkout. Check the secret key and try again." });
+  }
+  return true;
 }
 
 // server/orders.ts
@@ -22931,12 +22981,13 @@ async function recordPaidSession(sessionId) {
   const quantity = line?.quantity && line.quantity > 0 ? line.quantity : 1;
   const heard = session.custom_fields?.find((field) => field.key === "heard");
   const heardValue = heard && "dropdown" in heard ? text(heard.dropdown?.value) : "";
+  const price = await readShopPrice();
   const order = await insertOrder({
     stripeSessionId: session.id,
     stripePaymentIntentId: paymentIntentId(session.payment_intent),
     quantity,
-    amountCents: session.amount_total ?? quantity * 4e3,
-    currency: session.currency ?? "usd",
+    amountCents: session.amount_total ?? quantity * price.unitAmountCents,
+    currency: session.currency ?? price.currency,
     customerName: text(shipping?.name) || text(session.customer_details?.name),
     customerEmail: text(session.customer_details?.email),
     customerPhone: text(session.customer_details?.phone),
@@ -23226,6 +23277,16 @@ function signedIn(req) {
 function text2(value) {
   return typeof value === "string" ? value.trim() : "";
 }
+function shopCurrency(value) {
+  return value === "usd" || value === "cad" ? value : null;
+}
+function centsFromDollars(value) {
+  if (!/^\d+(\.\d{1,2})?$/.test(value)) return null;
+  const [whole, frac = ""] = value.split(".");
+  const cents = Number(whole) * 100 + Number(frac.padEnd(2, "0"));
+  if (!Number.isInteger(cents) || cents < 50 || cents > 999999) return null;
+  return cents;
+}
 function shippingFromBody(body) {
   const settings = {
     street1: text2(body.street1),
@@ -23272,6 +23333,22 @@ async function handleAdmin(req, res, url) {
   }
   if (!signedIn(req)) {
     send2(res, 401, { error: "Sign in again." });
+    return;
+  }
+  if (url.pathname === "/api/admin/price" && req.method === "POST") {
+    const body = await readJson2(req);
+    const cents = centsFromDollars(text2(body.amount));
+    const currency = text2(body.currency).toLowerCase();
+    if (cents === null) {
+      send2(res, 400, { error: "Enter a price from $0.50 to $9,999.99, like 40 or 40.50." });
+      return;
+    }
+    const currencyCode = shopCurrency(currency);
+    if (!currencyCode) {
+      send2(res, 400, { error: "Currency has to be USD or CAD." });
+      return;
+    }
+    send2(res, 200, await writeShopPrice({ unitAmountCents: cents, currency: currencyCode }));
     return;
   }
   if (url.pathname === "/api/admin/shipping" && req.method === "GET") {
@@ -23356,6 +23433,11 @@ function carrierStatusOf(payload) {
 }
 async function handleApi(req, res) {
   const url = new URL(req.url ?? "/", "http://localhost");
+  if (req.method === "GET" && url.pathname === "/api/shop") {
+    const price = await readShopPrice();
+    send2(res, 200, price);
+    return true;
+  }
   if (url.pathname === "/api/checkout") return handleCheckout(req, res);
   if (req.method === "POST" && url.pathname === "/api/orders/confirm") {
     const body = await readJson2(req);

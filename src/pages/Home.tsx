@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
-import { money, UNIT_PRICE, SERVINGS, SERVING_ML, BOTTLE_ML, PHONE_DISPLAY, PHONE_TEL } from "../lib/order";
+import { money, priced, SERVINGS, SERVING_ML, BOTTLE_ML, PHONE_DISPLAY, PHONE_TEL } from "../lib/order";
+import { useShop } from "../lib/shop";
 
 const ingredients = [
   {
@@ -100,6 +101,14 @@ const questions = [
 
 export function Home() {
   const navigate = useNavigate();
+  const shop = useShop();
+  const unit = shop.unitAmountCents / 100;
+  const bottle = priced(unit, shop.currency);
+  const serving = priced(unit / SERVINGS, shop.currency);
+  const servingAmount = money(unit / SERVINGS);
+  const tickerItems = ticker.map((item) => (item === "$40" ? bottle : item));
+  const whyItems = why.map((item) => ({ ...item, copy: item.copy.replace("$40", bottle) }));
+  const questionItems = questions.map((item) => ({ ...item, q: item.q.replace("$40", bottle) }));
   function orderNow() {
     navigate("/checkout");
   }
@@ -110,14 +119,14 @@ export function Home() {
     name: "Dual Sun Elixir Gold Edition",
     image: "https://dualsunelixir.com/images/bottle.png",
     description:
-      "Honey, ginger, turmeric, lemon, and black pepper. 250 mL Gold Edition. $40 USD. 25 servings.",
+      `Honey, ginger, turmeric, lemon, and black pepper. 250 mL Gold Edition. ${bottle}. 25 servings.`,
     brand: { "@type": "Brand", name: "Dual Sun Elixir" },
     sku: "DSE-GOLD-250",
     size: "250 mL",
     offers: {
       "@type": "Offer",
-      priceCurrency: "USD",
-      price: "40.00",
+      priceCurrency: shop.currency.toUpperCase(),
+      price: unit.toFixed(2),
       availability: "https://schema.org/InStock",
       url: "https://dualsunelixir.com/checkout",
       areaServed: [
@@ -169,7 +178,7 @@ export function Home() {
               </a>
             </div>
             <p className="mt-2 max-w-sm text-sm leading-6 text-cream/70 sm:mt-5">
-              {money(UNIT_PRICE / SERVINGS)} a serving · USA and Canada · Leaves in 1–3 days
+              {serving} a serving · USA and Canada · Leaves in 1–3 days
             </p>
           </div>
         </div>
@@ -179,7 +188,7 @@ export function Home() {
         <div className="marquee-track flex w-max">
           {[0, 1].map((copy) => (
             <p key={copy} className="flex shrink-0 items-center gap-8 pr-8 font-display text-lg font-semibold tracking-tight">
-              {ticker.map((item) => (
+              {tickerItems.map((item) => (
                 <span key={`${copy}-${item}`} className="flex items-center gap-8">
                   {item}
                   <span className="text-gold">·</span>
@@ -197,11 +206,11 @@ export function Home() {
             Taste it once. Then you want the bottle.
           </h2>
           <p className="mt-5 max-w-xl text-lg leading-8 text-stone">
-            Honey, ginger, turmeric, lemon, and black pepper. {money(UNIT_PRICE)} for {SERVINGS} mornings.
+            Honey, ginger, turmeric, lemon, and black pepper. {bottle} for {SERVINGS} mornings.
             Food, taken with breakfast. Not a medicine.
           </p>
           <ol className="mt-12 grid gap-4 md:grid-cols-3">
-            {why.map((item, index) => (
+            {whyItems.map((item, index) => (
               <li key={item.title} className="rounded-[1.5rem] bg-cream p-6">
                 <p className="font-display text-sm font-extrabold text-brass">0{index + 1}</p>
                 <h3 className="mt-4 font-display text-3xl font-extrabold tracking-tight">{item.title}</h3>
@@ -230,7 +239,7 @@ export function Home() {
               className="h-12 w-fit cursor-pointer rounded-full bg-gold px-5 text-sm font-semibold text-ink"
               onClick={orderNow}
             >
-              Get it for {money(UNIT_PRICE)}
+              Get it for {bottle}
             </button>
           </div>
           <dl className="mt-16 grid gap-12 border-t border-white/10 pt-10 md:grid-cols-3 md:gap-8">
@@ -239,8 +248,13 @@ export function Home() {
               <dd className="mt-3 max-w-[18ch] text-base text-mist">Bottles sold by people, not ads.</dd>
             </div>
             <div>
-              <dt className="font-display text-7xl font-extrabold tracking-[-0.04em] sm:text-8xl">{money(UNIT_PRICE / SERVINGS)}</dt>
-              <dd className="mt-3 max-w-[18ch] text-base text-mist">What one morning costs. The bottle is {money(UNIT_PRICE)}.</dd>
+              <dt className="font-display text-7xl font-extrabold tracking-[-0.04em] sm:text-8xl">
+                {servingAmount}
+                <span className="ml-3 align-baseline text-2xl font-semibold tracking-normal text-mist sm:text-3xl">
+                  {shop.currency.toUpperCase()}
+                </span>
+              </dt>
+              <dd className="mt-3 max-w-[18ch] text-base text-mist">What one morning costs. The bottle is {bottle}.</dd>
             </div>
             <div>
               <dt className="font-display text-7xl font-extrabold tracking-[-0.04em] sm:text-8xl">{SERVING_ML} mL</dt>
@@ -308,7 +322,7 @@ export function Home() {
               ))}
             </ol>
             <p className="mt-6 text-sm text-cream/70">
-              {BOTTLE_ML} mL · 25 days at one spoon · {money(UNIT_PRICE / SERVINGS)} a serving
+              {BOTTLE_ML} mL · 25 days at one spoon · {serving} a serving
             </p>
           </div>
         </div>
@@ -329,7 +343,7 @@ export function Home() {
             className="inline-flex h-14 shrink-0 cursor-pointer items-center rounded-full bg-gold px-6 text-sm font-semibold text-ink sm:text-base"
             onClick={orderNow}
           >
-            Order · {money(UNIT_PRICE)}
+            Order · {bottle}
           </button>
         </div>
       </section>
@@ -343,11 +357,11 @@ export function Home() {
               className="mt-6 hidden h-12 cursor-pointer rounded-full bg-gold px-5 text-sm font-semibold text-ink md:inline-flex md:items-center"
               onClick={orderNow}
             >
-              Order · {money(UNIT_PRICE)}
+              Order · {bottle}
             </button>
           </div>
           <div>
-            {questions.map((item) => (
+            {questionItems.map((item) => (
               <details key={item.q} className="group border-b border-ink/10 py-4">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-6 text-lg font-medium">
                   <span>{item.q}</span>
@@ -367,7 +381,7 @@ export function Home() {
           </h2>
           <div className="shrink-0">
             <p className="mb-4 max-w-xs text-lg text-mist">
-              If they didn’t, start with one bottle. {money(UNIT_PRICE)}. USA and Canada.
+              If they didn’t, start with one bottle. {bottle}. USA and Canada.
             </p>
             <button
               type="button"

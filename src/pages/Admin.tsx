@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { money } from "../lib/order";
+import { formatDollars, money, priced } from "../lib/order";
 
 type Tab = "placed" | "prepared" | "shipped" | "delivered" | "holds";
 
@@ -8,6 +8,7 @@ type Order = {
   status: string;
   quantity: number;
   amountCents: number;
+  currency: string;
   name: string;
   email: string;
   phone: string;
@@ -91,6 +92,11 @@ export function Admin() {
   const [shippingError, setShippingError] = useState("");
   const [shippingSaved, setShippingSaved] = useState(false);
   const [savingShipping, setSavingShipping] = useState(false);
+  const [priceAmount, setPriceAmount] = useState("40");
+  const [priceCurrency, setPriceCurrency] = useState<"usd" | "cad">("usd");
+  const [priceError, setPriceError] = useState("");
+  const [priceSaved, setPriceSaved] = useState(false);
+  const [savingPrice, setSavingPrice] = useState(false);
 
   const load = useCallback(async (next: Tab) => {
     setLoading(true);
@@ -135,6 +141,14 @@ export function Admin() {
 
   useEffect(() => {
     if (!authed) return;
+    void fetch("/api/shop")
+      .then(async (response) => {
+        if (!response.ok) return;
+        const body = (await response.json()) as { unitAmountCents?: number; currency?: string };
+        if (typeof body.unitAmountCents === "number") setPriceAmount(formatDollars(body.unitAmountCents));
+        if (body.currency === "usd" || body.currency === "cad") setPriceCurrency(body.currency);
+      })
+      .catch(() => undefined);
     void fetch("/api/admin/shipping")
       .then(async (response) => {
         if (!response.ok) return;
@@ -147,6 +161,27 @@ export function Admin() {
   function setField(key: keyof Shipping, value: string) {
     setShippingSaved(false);
     setShipping((current) => (current ? { ...current, [key]: value } : current));
+  }
+
+  async function savePrice(event: FormEvent) {
+    event.preventDefault();
+    setSavingPrice(true);
+    setPriceError("");
+    setPriceSaved(false);
+    const response = await fetch("/api/admin/price", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: priceAmount.trim(), currency: priceCurrency }),
+    });
+    setSavingPrice(false);
+    if (!response.ok) {
+      setPriceError(await readError(response));
+      return;
+    }
+    const body = (await response.json()) as { unitAmountCents: number; currency: "usd" | "cad" };
+    setPriceAmount(formatDollars(body.unitAmountCents));
+    setPriceCurrency(body.currency);
+    setPriceSaved(true);
   }
 
   async function saveShipping(event: FormEvent) {
@@ -260,6 +295,51 @@ export function Admin() {
 
         {authed ? (
           <>
+            <form className="mt-8 rounded-[1.5rem] bg-cream p-6" onSubmit={(event) => void savePrice(event)}>
+              <h2 className="font-display text-2xl font-extrabold">Price</h2>
+              <p className="mt-2 text-sm text-stone">
+                Charged per bottle. Orders already paid keep the price they were charged.
+              </p>
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                <label className="text-sm font-semibold" htmlFor="shop-price">
+                  Price
+                  <input
+                    id="shop-price"
+                    inputMode="decimal"
+                    value={priceAmount}
+                    onChange={(event) => {
+                      setPriceSaved(false);
+                      setPriceAmount(event.target.value);
+                    }}
+                    className="mt-2 h-11 w-full rounded-full border border-ink/15 bg-paper px-4 font-normal outline-none"
+                  />
+                </label>
+                <label className="text-sm font-semibold" htmlFor="shop-currency">
+                  Currency
+                  <select
+                    id="shop-currency"
+                    value={priceCurrency}
+                    onChange={(event) => {
+                      setPriceSaved(false);
+                      setPriceCurrency(event.target.value === "cad" ? "cad" : "usd");
+                    }}
+                    className="mt-2 h-11 w-full rounded-full border border-ink/15 bg-paper px-4"
+                  >
+                    <option value="usd">USD</option>
+                    <option value="cad">CAD</option>
+                  </select>
+                </label>
+              </div>
+              {priceError ? <p className="mt-3 text-sm text-brass">{priceError}</p> : null}
+              {priceSaved ? <p className="mt-3 text-sm text-stone">Saved. The site charges this on the next order.</p> : null}
+              <button
+                type="submit"
+                disabled={savingPrice}
+                className="mt-5 h-11 cursor-pointer rounded-full bg-gold px-5 text-sm font-semibold disabled:opacity-60"
+              >
+                {savingPrice ? "Saving…" : "Save price"}
+              </button>
+            </form>
             {shipping ? (
               <form className="mt-8 rounded-[1.5rem] bg-cream p-6" onSubmit={(event) => void saveShipping(event)}>
                 <h2 className="font-display text-2xl font-extrabold">Ship from</h2>
@@ -332,7 +412,7 @@ export function Admin() {
                   <div className="flex flex-wrap items-baseline justify-between gap-3">
                     <h2 className="font-display text-2xl font-extrabold">#{order.id}</h2>
                     <p className="text-sm font-semibold">
-                      {order.quantity} {order.quantity === 1 ? "bottle" : "bottles"} · {money(order.amountCents / 100)}
+                      {order.quantity} {order.quantity === 1 ? "bottle" : "bottles"} · {priced(order.amountCents / 100, order.currency || "usd")}
                     </p>
                   </div>
                   <p className="mt-3 text-lg font-semibold">{order.name || "Name missing"}</p>
@@ -363,7 +443,7 @@ export function Admin() {
                   ) : null}
                   {order.holdDetail ? <p className="mt-3 text-sm font-semibold">{order.holdDetail}</p> : null}
                   {order.refundCents > 0 && order.holdKind !== "refund" ? (
-                    <p className="mt-2 text-sm">Refunded {money(order.refundCents / 100)}</p>
+                    <p className="mt-2 text-sm">Refunded {priced(order.refundCents / 100, order.currency || "usd")}</p>
                   ) : null}
                   {order.labelError && order.status === "placed" ? <p className="mt-3 text-sm text-brass">{order.labelError}</p> : null}
 

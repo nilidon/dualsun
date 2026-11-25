@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import Stripe from "stripe";
+import { readShopPrice } from "./db";
 
-const UNIT_AMOUNT = 4000;
 const MAX_QUANTITY = 12;
 
 function send(res: ServerResponse, status: number, body: { url?: string; error?: string }) {
@@ -91,6 +91,7 @@ export async function handleCheckout(req: IncomingMessage, res: ServerResponse) 
       return true;
     }
 
+    const price = await readShopPrice();
     const stripe = new Stripe(key);
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -99,8 +100,8 @@ export async function handleCheckout(req: IncomingMessage, res: ServerResponse) 
         {
           quantity,
           price_data: {
-            currency: "usd",
-            unit_amount: UNIT_AMOUNT,
+            currency: price.currency,
+            unit_amount: price.unitAmountCents,
             product_data: {
               name: "Dual Sun Elixir Gold Edition",
               description: "250 mL. Honey, ginger, turmeric, lemon, and black pepper.",
@@ -139,6 +140,11 @@ export async function handleCheckout(req: IncomingMessage, res: ServerResponse) 
     send(res, 200, { url: session.url });
   } catch (error) {
     console.error(error);
+    const message = error instanceof Error ? error.message : "";
+    if (message.startsWith("Add SUPABASE_") || message.startsWith("Run supabase/")) {
+      send(res, 503, { error: message });
+      return true;
+    }
     send(res, 502, { error: "Stripe could not start checkout. Check the secret key and try again." });
   }
   return true;
